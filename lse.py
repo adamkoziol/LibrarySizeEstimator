@@ -1,3 +1,4 @@
+#!/usr/bin/env python
 __author__ = 'akoziol'
 
 from multiprocessing import Pool
@@ -15,7 +16,7 @@ import time
 import glob
 
 # The path is still hardcoded as, most of the time, this script is run from within Pycharm.
-os.chdir("/media/nas/akoziol/Pipeline_development/LibrarySizeEstimation")
+#os.chdir("/media/nas/akoziol/Pipeline_development/LibrarySizeEstimation")
 path = os.getcwd()
 
 targets = [name for name in os.listdir(".") if os.path.isdir(name) and name != "Best_Assemblies"]
@@ -25,6 +26,7 @@ os.chdir("%s/Best_Assemblies" % path)
 referenceFile = glob.glob("*.fa*")
 references = ["%s/Best_Assemblies/" % path + fastaFile for fastaFile in referenceFile]
 
+# Create a dictionary of sorted tuples using zip
 inputData = dict(zip(sorted(references), sorted(targets)))
 
 count = 0
@@ -123,11 +125,58 @@ def extractInsertSize(target):
     filePath = "%s/tmp/%s" % (path, target)
     if not os.path.isfile("%s/%s_insertsizes.csv" % (filePath, target)):
         extractCommand = "samtools view %s/%s.bam | cut -f9 > %s/%s_insertsizes.csv" % (filePath, target, filePath, target)
-        #print extractCommand
         subprocess.call(extractCommand, shell=True, stdout=open(os.devnull, 'wb'), stderr=open(os.devnull, 'wb'))
         sys.stdout.write('.')
     else:
         sys.stdout.write('.')
+
+
+def graphingProcesses():
+    """Mapping threads!"""
+    print '\nGraphing results'
+    graphingProcessesArgs = []
+    if __name__ == '__main__':
+        graphingProcessesPool = Pool()
+        # uses target
+        for reference, target in inputData.iteritems():
+            graphingProcessesArgs.append(target)
+        graphingProcessesPool.map(graphing, graphingProcessesArgs)
+
+
+def graphing(target):
+    """Uses samtools view and Linux cut to extract the column of interest (column 9), which contains the distance between
+    mapped paired reads"""
+    # samtools view HG00418_A.bam | cut -f9 > HG00418_A.insertsizes.txt
+    filePath = "%s/tmp/%s" % (path, target)
+    newPath = "%s/insertSizes" % (path)
+    make_path(newPath)
+    os.chdir(newPath)
+    if not os.path.isfile("%s/%s_insert_sizes.pdf" % (newPath, target)):
+        graphingCommand = "Rscript /home/blais/PycharmProjects/LibrarySizeEstimator/insertsizes.R %s %s" % (filePath, target)
+        subprocess.call(graphingCommand, shell=True, stdout=open(os.devnull, 'wb'), stderr=open(os.devnull, 'wb'))
+        sys.stdout.write('.')
+    else:
+       sys.stdout.write('.')
+
+
+def formatOutput():
+    os.chdir("%s/insertSizes" % path)
+    print("\nFormatting Outputs")
+    if not os.path.isfile("insertSizes.csv"):
+        textfiles = glob.glob("*.txt")
+        with open("insertSizes.csv", "a") as outputFile:
+            outputFile.write("Strain\tMedian Insert Size\tStandard Deviation\n")
+            for files in textfiles:
+                infile = open(files, "r")
+                inData = infile.read()
+                infile.close()
+                outputFile.write("%s\n" % inData)
+                os.remove(files)
+                sys.stdout.write('.')
+        print "\nFormatting complete"
+    else:
+        print "Formatting complete"
+
 
 def pipeline():
     """Calls all the functions in a way that they can be multi-processed"""
@@ -135,7 +184,8 @@ def pipeline():
     #Start the mapping operations
     mappingProcesses()
     extractingProcesses()
-
+    graphingProcesses()
+    formatOutput()
 
 start = time.time()
 pipeline()
