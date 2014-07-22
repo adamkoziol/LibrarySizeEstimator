@@ -15,21 +15,18 @@ import time
 # Glob finds all the path names matching a specified pattern according to the rules used by the Unix shell
 import glob
 
-# The path is still hardcoded as, most of the time, this script is run from within Pycharm.
-#os.chdir("/media/nas/akoziol/Pipeline_development/LibrarySizeEstimation")
 path = os.getcwd()
-
-targets = [name for name in os.listdir(".") if os.path.isdir(name) and name != "Best_Assemblies"]
 
 os.chdir("%s/Best_Assemblies" % path)
 
 referenceFile = glob.glob("*.fa*")
-references = ["%s/Best_Assemblies/" % path + fastaFile for fastaFile in referenceFile]
+references = ["%s/Best_Assemblies/%s" % (path, fastaFile) for fastaFile in referenceFile]
+
+targets = [reference.split('.')[0] for reference in referenceFile]
 
 # Create a dictionary of sorted tuples using zip
 inputData = dict(zip(sorted(references), sorted(targets)))
 
-count = 0
 
 def make_path(inPath):
     """from: http://stackoverflow.com/questions/273192/check-if-a-directory-exists-and-create-it-if-necessary \
@@ -41,10 +38,27 @@ def make_path(inPath):
             raise
 
 
+dotcount = 0
+
+
+def dotter():
+    """This function is borrowed from Mike Knowles. It allows for the addition of pretty
+    dots after every pool is finished its task. Additionally, it formats the dots such that
+    there are only 80 dots per line, and the date is added at the start of each line"""
+    global dotcount
+    if dotcount <= 80:
+        sys.stdout.write('.')
+        # I added this flush command, as the dots were not being printed until the script
+        # finished processing
+        sys.stdout.flush()
+        dotcount += 1
+    else:
+        sys.stdout.write('\n[%s].' % (time.strftime("%H:%M:%S")))
+        dotcount = 0
+
+
 def indexTargetsProcesses():
-    global count
-    sys.stdout.write('Indexing targets\n') if count == 0 else sys.stdout.write('')
-    count = 1
+    sys.stdout.write('Indexing targets\n')
     indexTargetArgs = []
     if __name__ == '__main__':
         indexTargetsPool = Pool()
@@ -54,6 +68,7 @@ def indexTargetsProcesses():
         indexTargetsPool.map(indexTargets, indexTargetArgs)
 
 
+
 def indexTargets((reference, target)):
     """Performs smalt index on the targets using the range of k-mers stored in the variable kmer"""
     filename = target.split('.')[0]
@@ -61,17 +76,15 @@ def indexTargets((reference, target)):
     indexPath = "%s/targets/%s" % (path, filename)
     # Call the make_path function to make folders as necessary
     make_path(indexPath)
+    shutil.copy(reference, indexPath)
+    os.chdir(indexPath)
     indexFileSMI = "%s.smi" % filename
-    indexFileSMA = "%s.sma" % filename
     if not os.path.isfile("%s/%s" % (indexPath, indexFileSMI)):
         indexCommand = "smalt index -k 20 -s 10 %s %s" % (target, reference)
         subprocess.call(indexCommand, shell=True, stdout=open(os.devnull, 'wb'), stderr=open(os.devnull, 'wb'))
-        shutil.move(indexFileSMI, indexPath)
-        shutil.move(indexFileSMA, indexPath)
-        shutil.copy(reference, indexPath)
-        sys.stdout.write('.')
+        dotter()
     else:
-        sys.stdout.write('.')
+        dotter()
 
 
 def mappingProcesses():
@@ -83,11 +96,11 @@ def mappingProcesses():
         mappingProcessesPool = Pool()
         # uses target
         for reference, target in inputData.iteritems():
-            mappingProcessesArgs.append(target)
+            mappingProcessesArgs.append((reference, target))
         mappingProcessesPool.map(mapping, mappingProcessesArgs)
 
 
-def mapping(target):
+def mapping((reference, target)):
     """Performs the mapping of the simulated reads to the targets"""
     filename = target.split('.')[0]
     os.chdir("%s/%s" % (path, target))
@@ -100,9 +113,9 @@ def mapping(target):
         smaltMap = "smalt map -o %s/%s.bam -f bam -x %s %s %s" \
                    % (filePath, target, targetPath, fastq1, fastq2)
         subprocess.call(smaltMap, shell=True, stdout=open(os.devnull, 'wb'), stderr=open(os.devnull, 'wb'))
-        sys.stdout.write('.')
+        dotter()
     else:
-        sys.stdout.write('.')
+        dotter()
 
 
 def extractingProcesses():
@@ -114,11 +127,11 @@ def extractingProcesses():
         extractingProcessesPool = Pool()
         # uses target
         for reference, target in inputData.iteritems():
-            extractingProcessesArgs.append(target)
+            extractingProcessesArgs.append((reference, target))
         extractingProcessesPool.map(extractInsertSize, extractingProcessesArgs)
 
 
-def extractInsertSize(target):
+def extractInsertSize((reference, target)):
     """Uses samtools view and Linux cut to extract the column of interest (column 9), which contains the distance between
     mapped paired reads"""
     # samtools view HG00418_A.bam | cut -f9 > HG00418_A.insertsizes.txt
@@ -126,9 +139,9 @@ def extractInsertSize(target):
     if not os.path.isfile("%s/%s_insertsizes.csv" % (filePath, target)):
         extractCommand = "samtools view %s/%s.bam | cut -f9 > %s/%s_insertsizes.csv" % (filePath, target, filePath, target)
         subprocess.call(extractCommand, shell=True, stdout=open(os.devnull, 'wb'), stderr=open(os.devnull, 'wb'))
-        sys.stdout.write('.')
+        dotter()
     else:
-        sys.stdout.write('.')
+        dotter()
 
 
 def graphingProcesses():
@@ -154,17 +167,19 @@ def graphing(target):
     if not os.path.isfile("%s/%s_insert_sizes.pdf" % (newPath, target)):
         graphingCommand = "Rscript /home/blais/PycharmProjects/LibrarySizeEstimator/insertsizes.R %s %s" % (filePath, target)
         subprocess.call(graphingCommand, shell=True, stdout=open(os.devnull, 'wb'), stderr=open(os.devnull, 'wb'))
-        sys.stdout.write('.')
+        dotter()
     else:
-       sys.stdout.write('.')
+        dotter()
 
 
 def formatOutput():
     os.chdir("%s/insertSizes" % path)
     print("\nFormatting Outputs")
-    if not os.path.isfile("insertSizes.csv"):
+    # Determine the folder name by taking the last folder name from the path
+    folderName = path.split('/')[-1]
+    if not os.path.isfile("%s_insertSizes.csv" % folderName):
         textfiles = glob.glob("*.txt")
-        with open("insertSizes.csv", "a") as outputFile:
+        with open("%s_insertSizes.csv" % folderName, "a") as outputFile:
             outputFile.write("Strain\tMedian Insert Size\tStandard Deviation\n")
             for files in textfiles:
                 infile = open(files, "r")
@@ -172,7 +187,7 @@ def formatOutput():
                 infile.close()
                 outputFile.write("%s\n" % inData)
                 os.remove(files)
-                sys.stdout.write('.')
+                dotter()
         print "\nFormatting complete"
     else:
         print "Formatting complete"
